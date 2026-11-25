@@ -1,0 +1,16 @@
+{
+  "name": "PocketFlow",
+  "short_name": "PocketFlow",
+  "description": "A clearer view of your money.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f8f5",
+  "theme_color": "#0c8b5b",
+  "icons": [
+    {
+      "src": "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/icon.ico-EKi0m8IUpfGjf7PpZ6tuFhp5uqSOZR.x-icon",
+      "sizes": "any",
+      "type": "image/x-icon"
+    }
+  ]
+}
