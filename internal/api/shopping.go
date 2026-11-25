@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type shoppingItem struct {
@@ -57,7 +58,7 @@ func (a *API) createShoppingItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
-	if input.Name == "" || len(input.Name) > 120 || input.Quantity < 1 || input.Quantity > 999 {
+	if input.Name == "" || utf8.RuneCountInString(input.Name) > 120 || input.Quantity < 1 || input.Quantity > 999 {
 		writeError(w, http.StatusBadRequest, "Enter an item name and a quantity from 1 to 999.")
 		return
 	}
@@ -93,7 +94,7 @@ func (a *API) updateShoppingItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
-	if input.Version < 1 || input.Name == "" || len(input.Name) > 120 || input.Quantity < 1 || input.Quantity > 999 {
+	if input.Version < 1 || input.Name == "" || utf8.RuneCountInString(input.Name) > 120 || input.Quantity < 1 || input.Quantity > 999 {
 		writeError(w, http.StatusBadRequest, "Enter an item name and a quantity from 1 to 999.")
 		return
 	}
@@ -108,6 +109,9 @@ func (a *API) updateShoppingItem(w http.ResponseWriter, r *http.Request) {
 		var exists int
 		if err := a.store.DB.QueryRowContext(r.Context(), `SELECT 1 FROM shopping_items WHERE user_id=? AND id=?`, userID, id).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "Shopping item not found.")
+			return
+		} else if err != nil {
+			writeError(w, http.StatusInternalServerError, "Unable to verify this item.")
 			return
 		}
 		writeError(w, http.StatusConflict, "This item changed on another device. Refresh the list before updating it.")
