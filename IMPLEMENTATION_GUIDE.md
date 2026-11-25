@@ -29,13 +29,67 @@ All routes use the existing account authentication middleware. The frontend requ
 
 A Sun/Moon control in the top application bar switches directly between light and dark mode. It calls the same `changePreferences` handler as Settings, so the selection is applied immediately to `document.documentElement.dataset.theme`, saved with the existing offline preference store, and synchronized to the account when available. Theme palettes are already tokenized in `styles.css`; `system` remains an available Settings preference and honors `prefers-color-scheme`. The header control advertises its destination with an accessible label and title.
 
+## Run the app from VS Code
+
+### 1. Install prerequisites
+
+Install VS Code, Git, Go 1.24 or newer, Node.js, and pnpm. In VS Code, open the repository root folder (the folder containing `go.mod` and `package.json`), not the `web` folder. If prompted, install the recommended Go and JavaScript/TypeScript extensions.
+
+### 2. Install frontend packages
+
+Open **Terminal → New Terminal** in VS Code. Confirm the terminal is at the repository root, then run:
+
+```sh
+pnpm install
+```
+
+### 3. Start the backend
+
+Open a second VS Code terminal at the repository root and run:
+
+```sh
+APP_ENV=development go run ./cmd/server
+```
+
+This starts the API at `http://localhost:8080`, creates `data/pocketflow.db` if needed, and applies database migrations—including `004_shopping_items.sql`—automatically. `APP_ENV=development` is important for local sign-in cookies over HTTP. Keep this terminal running.
+
+**Windows PowerShell:** use this equivalent command instead:
+
+```powershell
+$env:APP_ENV = "development"; go run ./cmd/server
+```
+
+### 4. Start the frontend
+
+Open a third VS Code terminal at the repository root and run:
+
+```sh
+pnpm dev
+```
+
+Open the local URL Vite prints (normally `http://localhost:5173`). The Vite development server proxies `/api` requests to the backend on port 8080, so keep both backend and frontend terminals running.
+
+### 5. Try the features
+
+Create an account or sign in, open **Shopping**, add an item, change its quantity, mark it purchased, and refresh to confirm it remains saved. Use the header control to switch light/dark themes and refresh to confirm the choice persists. The app starts with no demo shopping items; an empty list before adding items is expected.
+
+### Troubleshooting
+
+- **`pnpm` not found:** install/enable pnpm, then restart the VS Code terminal.
+- **`go` not found:** install Go 1.24 or newer, restart VS Code, and check that `go version` works in the integrated terminal.
+- **API/network errors:** make sure the backend terminal is still running on port 8080. If port 8080 is already occupied, stop the other process or configure `POCKETFLOW_ADDR` to another address and update the proxy in `web/vite.config.ts` to match.
+- **Sign-in cookie does not persist locally:** start the backend with `APP_ENV=development` as shown above.
+- **Reset local data:** stop the backend and back up or remove `data/pocketflow.db`; restarting creates a fresh local database. This deletes local accounts and app data.
+
 ## Local verification
 
-1. Install project dependencies with the repository’s pnpm lockfile workflow, if needed.
-2. Run the frontend checks with `pnpm build`.
-3. Run backend tests with `go test ./...` from the repository root.
-4. Start the application using the existing PocketFlow backend and Vite development server setup. The shopping endpoints need the backend and its configured database; the visual-only Vite server does not provide API persistence.
-5. Sign in and verify create, quantity change, purchase toggle, status filters, deletion, and refresh persistence. Sign out and confirm the list shows the sign-in prompt. Use a second account to confirm items stay private.
-6. Toggle light/dark from the header, refresh, and verify the preference remains selected; test the System choice in Settings against the OS color preference.
+From the repository root in the VS Code terminal:
+
+```sh
+pnpm build
+go test ./...
+```
+
+To verify shopping, sign in and test create, quantity change, purchase toggle, status filters, deletion, and refresh persistence. Sign out and confirm the list shows the sign-in prompt. Use a second account to confirm items stay private. Toggle light/dark from the header, refresh, and test the System choice in Settings against the OS color preference.
 
 The database migration runner applies `004_shopping_items.sql` on startup as part of the existing ordered migration process. Deploy the backend and migration together; do not manually seed list rows.
