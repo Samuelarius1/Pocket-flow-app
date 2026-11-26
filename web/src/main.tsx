@@ -1,3 +1,5 @@
+﻿import { apiFetch } from './api'
+import { Capacitor } from '@capacitor/core'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
@@ -46,7 +48,7 @@ function isNewerVersion(candidate: string, installed: string) {
 
 async function checkRelease() {
   try {
-    const response = await fetch('/api/releases/latest', { cache: 'no-store' })
+    const response = await apiFetch('/api/releases/latest', { cache: 'no-store' })
     if (!response.ok) return
     const release = await response.json() as { version?: string; minimumVersion?: string; mandatory?: boolean; notes?: string; publishedAt?: string }
     if (!release.version || !isNewerVersion(release.version, currentVersion)) return
@@ -61,7 +63,7 @@ void checkRelease()
 window.addEventListener('online', () => void checkRelease())
 window.setInterval(() => void checkRelease(), 5 * 60 * 1000)
 
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
+if (!Capacitor.isNativePlatform() && 'serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     void navigator.serviceWorker.register('/sw.js').then((registration) => {
       if (registration.waiting) window.dispatchEvent(new Event('pocketflow:update-available'))
@@ -94,3 +96,4 @@ void Promise.all([loadAccountPreferences(), pendingChanges()]).then(async ([remo
     window.dispatchEvent(new CustomEvent('pocketflow:sync-complete', { detail: result }))
   }
 })
+

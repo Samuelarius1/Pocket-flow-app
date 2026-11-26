@@ -26,3 +26,39 @@ web/dist/
 
 # IDE
 .vscode/
+# Android generated files
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+
+# Generated packages
+*.apk
+*.aab
+
+# Signing credentials
+*.jks
+*.keystore
+
+# Local configuration
+.env
+.env.*
+
+# Local Android Studio files
+.idea/
+local.properties
+
+# Unused root-level Android Studio project
+/app/
+/gradle/
+/build.gradle.kts
+/settings.gradle.kts
+/gradle.properties
+/gradlew
+/gradlew.bat
+
+# TypeScript generated file
+*.tsbuildinfo
+
+tsconfig.tsbuildinfo

@@ -38,8 +38,8 @@ func TestOpenUpgradesLegacyDatabaseWithoutLosingData(t *testing.T) {
 		if err := database.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 			t.Fatalf("read migration count: %v", err)
 		}
-		if applied != 3 {
-			t.Fatalf("expected 3 migrations, got %d", applied)
+		if applied != 4 {
+			t.Fatalf("expected 4 migrations, got %d", applied)
 		}
 		var email string
 		if err := database.DB.QueryRow(`SELECT email FROM users WHERE id='legacy-user'`).Scan(&email); err != nil {

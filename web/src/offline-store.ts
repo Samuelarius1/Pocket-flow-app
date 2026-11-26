@@ -1,3 +1,4 @@
+﻿import { apiFetch } from './api'
 import { replayFinanceOutbox } from './finance-store'
 
 export type Preferences = {
@@ -82,7 +83,7 @@ async function queueSync(preferences: Preferences): Promise<void> {
 
 export async function loadAccountPreferences(): Promise<Preferences | null> {
   try {
-    const response = await fetch('/api/preferences', { credentials: 'include', cache: 'no-store' })
+    const response = await apiFetch('/api/preferences', { credentials: 'include', cache: 'no-store' })
     if (!response.ok) return null
     const value = await response.json() as Partial<Preferences>
     return Object.keys(value).length ? normalizePreferences(value) : null
@@ -94,7 +95,7 @@ export async function loadAccountPreferences(): Promise<Preferences | null> {
 export async function syncPreferences(preferences: Preferences): Promise<'synced' | 'offline' | 'sign-in-required' | 'service-unavailable'> {
   if (!navigator.onLine) return 'offline'
   try {
-    const response = await fetch('/api/preferences', {
+    const response = await apiFetch('/api/preferences', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -143,3 +144,4 @@ if (typeof window !== 'undefined') {
     }).catch(() => undefined)
   })
 }
+

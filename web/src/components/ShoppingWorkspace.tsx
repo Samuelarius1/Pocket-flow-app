@@ -1,3 +1,4 @@
+﻿import { apiFetch } from '../api'
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import './ShoppingWorkspace.css'
@@ -10,7 +11,7 @@ type ShoppingInput = Pick<ShoppingItem, 'name' | 'quantity' | 'purchased'> & { v
 type Props = { onSignIn: () => void }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...options, credentials: 'include', headers: { 'Content-Type': 'application/json', ...options?.headers } })
+  const response = await apiFetch(url, { ...options, credentials: 'include', headers: { 'Content-Type': 'application/json', ...options?.headers } })
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string }
     throw Object.assign(new Error(body.error || 'Something went wrong. Please try again.'), { status: response.status })
@@ -96,7 +97,7 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
       <p>{items.length ? (purchasedCount === items.length ? 'Everything is checked off. Nice work.' : `${items.length - purchasedCount} ${items.length - purchasedCount === 1 ? 'item' : 'items'} left to find`) : 'Add your first item to get your list started.'}</p>
     </section>}
 
-    {needsSignIn ? <section className="shopping-empty panel"><span className="shopping-empty-icon"><ShoppingBasket size={22}/></span><h2>Sign in to keep your list</h2><p>Your shopping items are private to your account and sync across your devices.</p><button className="button button-primary" onClick={onSignIn}>Sign in to continue</button></section> : error && !data ? <section className="shopping-empty panel" role="alert"><span className="shopping-empty-icon"><ShoppingBasket size={22}/></span><h2>Couldn&apos;t reach your saved list</h2><p>Your shopping data hasn&apos;t been changed. Check your connection and try again.</p><button className="button button-secondary" onClick={() => void mutate()}>Try again</button></section> : !data ? <section className="shopping-loading" aria-live="polite"><LoaderCircle className="spin" size={18}/> Loading your saved list…</section> : <>
+    {needsSignIn ? <section className="shopping-empty panel"><span className="shopping-empty-icon"><ShoppingBasket size={22}/></span><h2>Sign in to keep your list</h2><p>Your shopping items are private to your account and sync across your devices.</p><button className="button button-primary" onClick={onSignIn}>Sign in to continue</button></section> : error && !data ? <section className="shopping-empty panel" role="alert"><span className="shopping-empty-icon"><ShoppingBasket size={22}/></span><h2>Couldn&apos;t reach your saved list</h2><p>Your shopping data hasn&apos;t been changed. Check your connection and try again.</p><button className="button button-secondary" onClick={() => void mutate()}>Try again</button></section> : !data ? <section className="shopping-loading" aria-live="polite"><LoaderCircle className="spin" size={18}/> Loading your saved listâ€¦</section> : <>
       {error && <p className="shopping-notice" role="status">Couldn&apos;t refresh. Showing the last loaded list.</p>}
       <form className="shopping-add panel" onSubmit={(event) => void addItem(event)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault() }}>
         <label className="shopping-name-field"><span className="sr-only">Item name</span><input autoComplete="off" maxLength={120} placeholder="What do you need?" value={name} onChange={(event) => setName(event.target.value)} /></label>
@@ -107,7 +108,7 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
       <div className="shopping-list-toolbar"><div className="shopping-filters" role="group" aria-label="Filter shopping items">{([['all', 'Everything', items.length], ['needed', 'To get', items.length - purchasedCount], ['purchased', 'Picked up', purchasedCount]] as const).map(([key, label, count]) => <button key={key} className={filter === key ? 'active' : ''} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}<span>{count}</span></button>)}</div>{purchasedCount > 0 && <button className="shopping-clear-button" onClick={() => void clearPurchased()} disabled={Boolean(busy)}><Trash2 size={14}/> Clear picked up</button>}</div>
 
       {notice && <p className="shopping-notice" role="status">{notice}</p>}
-      {visibleItems.length === 0 ? <section className="shopping-empty panel"><span className="shopping-empty-icon">{filter === 'purchased' ? <CheckCheck size={22}/> : <ShoppingBasket size={22}/>}</span><h2>{items.length === 0 ? 'A fresh start' : filter === 'needed' ? 'You’re all caught up' : filter === 'purchased' ? 'Nothing picked up yet' : 'No items here'}</h2><p>{items.length === 0 ? 'Add what you need above. Your list will appear here, ready for your next shop.' : filter === 'needed' ? 'Everything on your list has been checked off.' : 'Items that you mark as picked up will show here.'}</p></section> : <ul className="shopping-items" aria-label="Shopping items">{visibleItems.map((item) => <li key={item.id} className={`shopping-item panel${item.purchased ? ' is-purchased' : ''}`}>
+      {visibleItems.length === 0 ? <section className="shopping-empty panel"><span className="shopping-empty-icon">{filter === 'purchased' ? <CheckCheck size={22}/> : <ShoppingBasket size={22}/>}</span><h2>{items.length === 0 ? 'A fresh start' : filter === 'needed' ? 'Youâ€™re all caught up' : filter === 'purchased' ? 'Nothing picked up yet' : 'No items here'}</h2><p>{items.length === 0 ? 'Add what you need above. Your list will appear here, ready for your next shop.' : filter === 'needed' ? 'Everything on your list has been checked off.' : 'Items that you mark as picked up will show here.'}</p></section> : <ul className="shopping-items" aria-label="Shopping items">{visibleItems.map((item) => <li key={item.id} className={`shopping-item panel${item.purchased ? ' is-purchased' : ''}`}>
         <button className="shopping-check" aria-label={`${item.purchased ? 'Mark' : 'Mark'} ${item.name} as ${item.purchased ? 'needed' : 'picked up'}`} aria-pressed={item.purchased} disabled={Boolean(busy)} onClick={() => void updateItem(item, { purchased: !item.purchased })}>{busy === item.id ? <LoaderCircle className="spin" size={17}/> : item.purchased ? <Check size={17}/> : null}</button>
         <span className="shopping-item-name"><strong>{item.name}</strong><small>{item.purchased ? 'Picked up' : 'On your list'}</small></span>
         <div className="shopping-stepper" aria-label={`Quantity: ${item.quantity}`}><button aria-label={`Decrease ${item.name} quantity`} disabled={item.quantity <= 1 || Boolean(busy)} onClick={() => void updateItem(item, { quantity: item.quantity - 1 })}><Minus size={13}/></button><span>{item.quantity}</span><button aria-label={`Increase ${item.name} quantity`} disabled={item.quantity >= 999 || Boolean(busy)} onClick={() => void updateItem(item, { quantity: item.quantity + 1 })}><Plus size={13}/></button></div>
@@ -117,3 +118,4 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
     </>}
   </section>
 }
+

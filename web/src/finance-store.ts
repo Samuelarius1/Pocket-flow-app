@@ -1,3 +1,4 @@
+﻿import { apiFetch } from './api'
 export type FinanceResource = 'accounts' | 'transactions' | 'budgets' | 'goals'
 export type FinanceData = Record<string, string | number>
 export type FinanceRecord = { id: string; version: number; data: FinanceData; updatedAt: string }
@@ -51,7 +52,7 @@ export async function setFinanceOwner(ownerId: string): Promise<void> {
 export async function getFinanceOwner(): Promise<string | null> {
   if (navigator.onLine) {
     try {
-      const response = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
+      const response = await apiFetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
       if (!response.ok) return null
       const user = await response.json() as { id?: string }
       if (user.id) {
@@ -89,7 +90,7 @@ export async function loadFinanceCategories(): Promise<FinanceCategory[]> {
   if (!ownerId) throw new Error('Sign in to view your categories.')
   if (navigator.onLine) {
     try {
-      const response = await fetch('/api/categories', { credentials: 'include', cache: 'no-store' })
+      const response = await apiFetch('/api/categories', { credentials: 'include', cache: 'no-store' })
       if (response.status === 401) throw new Error('Sign in to view your categories.')
       if (!response.ok) throw new Error('Could not load categories.')
       const result = await response.json() as { items: FinanceCategory[] }
@@ -239,7 +240,7 @@ export async function replayFinanceOutbox(force = false): Promise<'synced' | 'of
     if (mutation.conflict) { deferred = true; continue }
     if (!force && mutation.nextAttemptAt && mutation.nextAttemptAt > Date.now()) { deferred = true; continue }
     try {
-      const response = await fetch(`/api/finance/${mutation.resource}${mutation.operation === 'create' ? '' : `/${encodeURIComponent(mutation.recordId)}`}`, {
+      const response = await apiFetch(`/api/finance/${mutation.resource}${mutation.operation === 'create' ? '' : `/${encodeURIComponent(mutation.recordId)}`}`, {
         method: mutation.operation === 'create' ? 'POST' : mutation.operation === 'update' ? 'PUT' : 'DELETE',
         credentials: 'include',
         headers: mutation.operation === 'delete' ? undefined : { 'Content-Type': 'application/json' },
@@ -282,7 +283,7 @@ export async function replayFinanceOutbox(force = false): Promise<'synced' | 'of
 export async function loadFinanceRecords(resource: FinanceResource): Promise<FinanceRecord[]> {
   if (navigator.onLine) {
     try {
-      const response = await fetch(`/api/finance/${resource}`, { credentials: 'include', cache: 'no-store' })
+      const response = await apiFetch(`/api/finance/${resource}`, { credentials: 'include', cache: 'no-store' })
       if (response.ok) {
         const result = await response.json() as { items: FinanceRecord[] }
         const ownerId = await getFinanceOwner()
@@ -302,3 +303,4 @@ export async function loadFinanceRecords(resource: FinanceResource): Promise<Fin
   if (!ownerId) throw new Error('Sign in once while online to use your financial records offline.')
   return getCachedFinance(resource)
 }
+
