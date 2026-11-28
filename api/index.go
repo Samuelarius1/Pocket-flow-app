@@ -7,8 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	pocketflowapi "pocketflow/internal/api"
-	"pocketflow/internal/store"
+	"pocketflow/server"
 )
 
 var (
@@ -24,12 +23,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			startupErr = fmt.Errorf("DATABASE_URL is not configured")
 			return
 		}
-		database, err := store.Open(connectionString)
+		handler, err := server.NewAPIHandler(connectionString)
 		if err != nil {
 			startupErr = err
 			return
 		}
-		apiHandler = pocketflowapi.New(database)
+		apiHandler = handler
 	})
 	if startupErr != nil {
 		http.Error(w, "PocketFlow account service is temporarily unavailable.", http.StatusServiceUnavailable)
