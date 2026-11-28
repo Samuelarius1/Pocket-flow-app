@@ -7,7 +7,7 @@ export type FinanceMutation = { id: string; ownerId: string; resource: FinanceRe
 
 type CacheEntry = { ownerId: string; records: unknown[] }
 const DATABASE = 'pocketflow-local'
-const DATABASE_VERSION = 2
+const DATABASE_VERSION = 3
 const OWNER_KEY = 'finance-owner'
 const FINANCE_CACHE = 'finance-cache'
 const FINANCE_OUTBOX = 'finance-outbox'
@@ -21,6 +21,8 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'id' })
       if (!db.objectStoreNames.contains(FINANCE_CACHE)) db.createObjectStore(FINANCE_CACHE)
       if (!db.objectStoreNames.contains(FINANCE_OUTBOX)) db.createObjectStore(FINANCE_OUTBOX, { keyPath: 'id' })
+      if (!db.objectStoreNames.contains('shopping-cache')) db.createObjectStore('shopping-cache')
+      if (!db.objectStoreNames.contains('shopping-outbox')) db.createObjectStore('shopping-outbox', { keyPath: 'id' })
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
@@ -53,7 +55,8 @@ export async function getFinanceOwner(): Promise<string | null> {
   if (navigator.onLine) {
     try {
       const response = await apiFetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
-      if (!response.ok) return null
+      if (response.status === 401) return null
+      if (!response.ok) return (await read<string>('preferences', OWNER_KEY)) ?? null
       const user = await response.json() as { id?: string }
       if (user.id) {
         await write('preferences', user.id, OWNER_KEY)
@@ -135,6 +138,18 @@ export async function enqueueFinanceMutation(mutation: Omit<FinanceMutation, 'id
 export async function saveCachedFinanceRecord(resource: FinanceResource, record: FinanceRecord): Promise<void> {
   const records = await getCachedFinance(resource)
   await cacheFinance(resource, [record, ...records.filter((item) => item.id !== record.id)])
+}
+
+export async function adjustCachedAccountBalance(accountId: string, currency: string, deltaMinor: number): Promise<void> {
+  if (!deltaMinor) return
+  const accounts = await getCachedFinance('accounts')
+  const account = accounts.find((item) => item.id === accountId)
+  if (!account || account.data.currency !== currency) return
+  await saveCachedFinanceRecord('accounts', {
+    ...account,
+    data: { ...account.data, balanceMinor: Number(account.data.balanceMinor || 0) + deltaMinor },
+    updatedAt: new Date().toISOString(),
+  })
 }
 
 export async function removeCachedFinanceRecord(resource: FinanceResource, recordId: string): Promise<void> {
@@ -271,6 +286,10 @@ export async function replayFinanceOutbox(force = false): Promise<'synced' | 'of
         const record = await response.json() as FinanceRecord
         await saveCachedFinanceRecord(mutation.resource, record)
       }
+      if (mutation.resource === 'transactions') {
+        try { await loadFinanceRecords('accounts') } catch { /* Keep the latest locally saved balance until the service is reachable. */ }
+        window.dispatchEvent(new Event('pocketflow:transaction-synced'))
+      }
     } catch {
       if (!navigator.onLine) return 'offline'
       await deferMutation(db, mutation)
@@ -283,15 +302,21 @@ export async function replayFinanceOutbox(force = false): Promise<'synced' | 'of
 export async function loadFinanceRecords(resource: FinanceResource): Promise<FinanceRecord[]> {
   if (navigator.onLine) {
     try {
-      const response = await apiFetch(`/api/finance/${resource}`, { credentials: 'include', cache: 'no-store' })
-      if (response.ok) {
-        const result = await response.json() as { items: FinanceRecord[] }
-        const ownerId = await getFinanceOwner()
-        if (ownerId) await cacheFinance(resource, result.items, ownerId)
-        return result.items
-      }
-      if (response.status === 401) throw new Error('Sign in to see and sync your financial records.')
-      throw new Error('Could not load financial records. Please try again.')
+      const records: FinanceRecord[] = []
+      let cursor = ''
+      do {
+        const query = new URLSearchParams({ limit: '100' })
+        if (cursor) query.set('cursor', cursor)
+        const response = await apiFetch(`/api/finance/${resource}?${query.toString()}`, { credentials: 'include', cache: 'no-store' })
+        if (response.status === 401) throw new Error('Sign in to see and sync your financial records.')
+        if (!response.ok) throw new Error('Could not load financial records. Please try again.')
+        const result = await response.json() as { items: FinanceRecord[]; nextCursor?: string }
+        records.push(...result.items)
+        cursor = result.nextCursor || ''
+      } while (cursor)
+      const ownerId = await getFinanceOwner()
+      if (ownerId) await cacheFinance(resource, records, ownerId)
+      return records
     } catch (error) {
       if (error instanceof Error && error.message.startsWith('Sign in')) throw error
       const cached = await getCachedFinance(resource)

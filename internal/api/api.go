@@ -44,6 +44,7 @@ func New(database *store.Store) http.Handler {
 	a := &API{store: database}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", a.health)
+	mux.HandleFunc("GET /api/health", a.health)
 	mux.HandleFunc("POST /api/auth/register", a.register)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("POST /api/auth/logout", a.logout)

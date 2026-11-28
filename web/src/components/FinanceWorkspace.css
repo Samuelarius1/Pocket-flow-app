@@ -1,0 +1,1 @@
+.finance-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:0 0 auto}.finance-head-actions .button{white-space:nowrap}@media(max-width:600px){.finance-head-actions{gap:6px;flex-wrap:wrap}.finance-head-actions .button{padding:0 8px;font-size:10px}}

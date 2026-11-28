@@ -82,6 +82,71 @@ func TestFinancialRecordsAreUserScopedAndVersioned(t *testing.T) {
 	}
 }
 
+func TestTransactionBalanceTracksCreateUpdateAndDelete(t *testing.T) {
+	database, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.DB.Close()
+	handler := New(database)
+	cookie := registerTestUser(t, handler, "balance@example.test")
+	accountResponse := requestJSON(t, handler, cookie, http.MethodPost, "/api/finance/accounts", map[string]any{"id": "daily", "data": map[string]any{"name": "Daily", "institution": "Test bank", "accountType": "checking", "currency": "USD", "balanceMinor": 10000}})
+	if accountResponse.Code != http.StatusCreated {
+		t.Fatalf("account status = %d, body=%s", accountResponse.Code, accountResponse.Body.String())
+	}
+	transactionData := map[string]any{"accountId": "daily", "categoryId": "system-food", "description": "Groceries", "currency": "USD", "amountMinor": 1250, "kind": "expense", "occurredAt": "2026-11-28T12:00:00Z"}
+	created := requestJSON(t, handler, cookie, http.MethodPost, "/api/finance/transactions", map[string]any{"id": "grocery-run", "data": transactionData})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("transaction status = %d, body=%s", created.Code, created.Body.String())
+	}
+	if balance := accountBalance(t, handler, cookie); balance != 8750 {
+		t.Fatalf("balance after expense = %d, want 8750", balance)
+	}
+	accountDelete := requestJSON(t, handler, cookie, http.MethodDelete, "/api/finance/accounts/daily", nil)
+	if accountDelete.Code != http.StatusConflict {
+		t.Fatalf("account with a transaction delete status = %d, want %d", accountDelete.Code, http.StatusConflict)
+	}
+	transactionData["amountMinor"] = 1800
+	transactionData["kind"] = "income"
+	transactionData["categoryId"] = "system-salary"
+	updated := requestJSON(t, handler, cookie, http.MethodPut, "/api/finance/transactions/grocery-run", map[string]any{"version": 1, "data": transactionData})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("transaction update status = %d, body=%s", updated.Code, updated.Body.String())
+	}
+	if balance := accountBalance(t, handler, cookie); balance != 11800 {
+		t.Fatalf("balance after type change = %d, want 11800", balance)
+	}
+	deleted := requestJSON(t, handler, cookie, http.MethodDelete, "/api/finance/transactions/grocery-run", nil)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("transaction delete status = %d, body=%s", deleted.Code, deleted.Body.String())
+	}
+	if balance := accountBalance(t, handler, cookie); balance != 10000 {
+		t.Fatalf("balance after delete = %d, want 10000", balance)
+	}
+	accountDelete = requestJSON(t, handler, cookie, http.MethodDelete, "/api/finance/accounts/daily", nil)
+	if accountDelete.Code != http.StatusNoContent {
+		t.Fatalf("unused account delete status = %d, want %d", accountDelete.Code, http.StatusNoContent)
+	}
+}
+
+func accountBalance(t *testing.T, handler http.Handler, cookie *http.Cookie) int64 {
+	t.Helper()
+	response := requestJSON(t, handler, cookie, http.MethodGet, "/api/finance/accounts", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("account list status = %d, body=%s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Items []financialRecord `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) == 0 {
+		t.Fatal("account list is empty")
+	}
+	return result.Items[0].Data.BalanceMinor
+}
+
 func TestFinancialRecordValidation(t *testing.T) {
 	database, err := store.Open(":memory:")
 	if err != nil {
