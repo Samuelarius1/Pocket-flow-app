@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"pocketflow/internal/store"
 )
 
 type shoppingItem struct {
@@ -28,7 +30,7 @@ type shoppingInput struct {
 
 func (a *API) listShoppingItems(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(userContextKey{}).(string)
-	rows, err := a.store.DB.QueryContext(r.Context(), `SELECT id,version,name,quantity,purchased,updated_at FROM shopping_items WHERE user_id=? ORDER BY purchased ASC, updated_at DESC, name COLLATE NOCASE`, userID)
+	rows, err := a.store.DB.QueryContext(r.Context(), `SELECT id,version,name,quantity,purchased,updated_at FROM shopping_items WHERE user_id=? ORDER BY purchased ASC, updated_at DESC, lower(name)`, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Unable to load your shopping list.")
 		return
@@ -37,12 +39,14 @@ func (a *API) listShoppingItems(w http.ResponseWriter, r *http.Request) {
 	items := make([]shoppingItem, 0)
 	for rows.Next() {
 		var item shoppingItem
-		var purchased int
+		var purchased bool
+
 		if err := rows.Scan(&item.ID, &item.Version, &item.Name, &item.Quantity, &purchased, &item.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "Unable to load your shopping list.")
 			return
 		}
-		item.Purchased = purchased == 1
+		item.Purchased = purchased
+
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -80,8 +84,19 @@ func (a *API) createShoppingItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Unable to add this item.")
 		return
 	}
-	created, _ := result.RowsAffected()
+	created, err := result.RowsAffected()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Unable to verify this item.")
+		return
+	}
 	if created == 0 {
+		var existing shoppingItem
+		var purchased bool
+		err := a.store.DB.QueryRowContext(r.Context(), `SELECT id,version,name,quantity,purchased,updated_at FROM shopping_items WHERE user_id=? AND id=?`, userID, input.ID).Scan(&existing.ID, &existing.Version, &existing.Name, &existing.Quantity, &purchased, &existing.UpdatedAt)
+		if err == nil && existing.Name == input.Name && existing.Quantity == input.Quantity && purchased == input.Purchased {
+			writeShoppingItem(w, r, http.StatusOK, a.store.DB, userID, input.ID)
+			return
+		}
 		writeError(w, http.StatusConflict, "This item identifier is already in use.")
 		return
 	}
@@ -135,9 +150,9 @@ func (a *API) deleteShoppingItem(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func writeShoppingItem(w http.ResponseWriter, r *http.Request, status int, db *sql.DB, userID, id string) {
+func writeShoppingItem(w http.ResponseWriter, r *http.Request, status int, db *store.DB, userID, id string) {
 	var item shoppingItem
-	var purchased int
+	var purchased bool
 	err := db.QueryRowContext(r.Context(), `SELECT id,version,name,quantity,purchased,updated_at FROM shopping_items WHERE user_id=? AND id=?`, userID, id).Scan(&item.ID, &item.Version, &item.Name, &item.Quantity, &purchased, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Shopping item not found.")
@@ -147,7 +162,8 @@ func writeShoppingItem(w http.ResponseWriter, r *http.Request, status int, db *s
 		writeError(w, http.StatusInternalServerError, "Unable to load this item.")
 		return
 	}
-	item.Purchased = purchased == 1
+	item.Purchased = purchased
+
 	if item.UpdatedAt == "" {
 		item.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	}

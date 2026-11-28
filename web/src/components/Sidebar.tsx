@@ -1,10 +1,9 @@
-import { ArrowDownLeft, ArrowUpRight, Bot, ChartNoAxesCombined, CircleHelp, CreditCard, LayoutDashboard, Settings2, ShoppingBasket, Sparkles, Target, WalletCards } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, Bot, ChartNoAxesCombined, CircleHelp, CreditCard, LayoutDashboard, Settings2, ShoppingBasket, Sparkles, Target } from 'lucide-react'
 
 export type Section = 'overview' | 'accounts' | 'transactions' | 'budgets' | 'goals' | 'shopping' | 'insights' | 'settings'
 
 const links = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'accounts', label: 'Accounts', icon: WalletCards },
   { id: 'transactions', label: 'Transactions', icon: ArrowDownLeft },
   { id: 'budgets', label: 'Budgets', icon: CreditCard },
   { id: 'goals', label: 'Savings goals', icon: Target },

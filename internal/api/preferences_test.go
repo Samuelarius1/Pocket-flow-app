@@ -10,6 +10,38 @@ import (
 	"pocketflow/internal/store"
 )
 
+func TestEmailPasswordSignInCreatesAuthenticatedSession(t *testing.T) {
+	database, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.DB.Close()
+	handler := New(database)
+	registerTestUser(t, handler, "signin@example.test")
+
+	login := requestJSON(t, handler, nil, http.MethodPost, "/api/auth/login", map[string]string{"email": "SIGNIN@example.test", "password": "a-secure-test-password"})
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body=%s", login.Code, login.Body.String())
+	}
+	var session *http.Cookie
+	for _, cookie := range login.Result().Cookies() {
+		if cookie.Name == sessionCookie {
+			session = cookie
+		}
+	}
+	if session == nil {
+		t.Fatal("login did not set a session cookie")
+	}
+	profile := requestJSON(t, handler, session, http.MethodGet, "/api/auth/me", nil)
+	if profile.Code != http.StatusOK {
+		t.Fatalf("authenticated profile status = %d, body=%s", profile.Code, profile.Body.String())
+	}
+	badPassword := requestJSON(t, handler, nil, http.MethodPost, "/api/auth/login", map[string]string{"email": "signin@example.test", "password": "incorrect-password"})
+	if badPassword.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password status = %d, want %d", badPassword.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestPreferenceAccessRequiresSessionAndStaysUserScoped(t *testing.T) {
 	database, err := store.Open(":memory:")
 	if err != nil {

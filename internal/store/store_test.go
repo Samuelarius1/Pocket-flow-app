@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -68,5 +69,24 @@ func TestOpenUpgradesLegacyDatabaseWithoutLosingData(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected existing record to survive reopen, got %d", count)
+	}
+}
+
+func TestPostgresMigrationWhenConfigured(t *testing.T) {
+	connectionString := os.Getenv("DATABASE_URL")
+	if connectionString == "" {
+		t.Skip("DATABASE_URL is not configured")
+	}
+	database, err := Open(connectionString)
+	if err != nil {
+		t.Fatalf("open configured postgres database: %v", err)
+	}
+	defer database.DB.Close()
+	var categoryCount int
+	if err := database.DB.QueryRow(`SELECT COUNT(*) FROM financial_categories WHERE id LIKE 'system-%'`).Scan(&categoryCount); err != nil {
+		t.Fatalf("read seeded categories: %v", err)
+	}
+	if categoryCount < 12 {
+		t.Fatalf("expected 12 system categories, got %d", categoryCount)
 	}
 }

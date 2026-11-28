@@ -1,5 +1,6 @@
 ﻿import { apiFetch } from './api'
 import { replayFinanceOutbox } from './finance-store'
+import { replayShoppingOutbox } from './shopping-store'
 
 export type Preferences = {
   displayName: string
@@ -26,18 +27,21 @@ export const defaultPreferences: Preferences = {
 }
 
 const DB_NAME = 'pocketflow-local'
+const DB_VERSION = 3
 const STORE = 'preferences'
 const OUTBOX = 'outbox'
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 2)
+    const request = indexedDB.open(DB_NAME, DB_VERSION)
     request.onupgradeneeded = () => {
       const db = request.result
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
       if (!db.objectStoreNames.contains(OUTBOX)) db.createObjectStore(OUTBOX, { keyPath: 'id' })
       if (!db.objectStoreNames.contains('finance-cache')) db.createObjectStore('finance-cache')
       if (!db.objectStoreNames.contains('finance-outbox')) db.createObjectStore('finance-outbox', { keyPath: 'id' })
+      if (!db.objectStoreNames.contains('shopping-cache')) db.createObjectStore('shopping-cache')
+      if (!db.objectStoreNames.contains('shopping-outbox')) db.createObjectStore('shopping-outbox', { keyPath: 'id' })
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
@@ -128,18 +132,19 @@ export async function pendingPreferences(): Promise<boolean> {
 export async function pendingChanges(): Promise<boolean> {
   const db = await openDatabase()
   return new Promise((resolve, reject) => {
-    const tx = db.transaction([OUTBOX, 'finance-outbox'])
+    const tx = db.transaction([OUTBOX, 'finance-outbox', 'shopping-outbox'])
     const preferenceRequest = tx.objectStore(OUTBOX).count()
     const financeRequest = tx.objectStore('finance-outbox').count()
-    tx.oncomplete = () => resolve(preferenceRequest.result + financeRequest.result > 0)
+    const shoppingRequest = tx.objectStore('shopping-outbox').count()
+    tx.oncomplete = () => resolve(preferenceRequest.result + financeRequest.result + shoppingRequest.result > 0)
     tx.onerror = () => reject(tx.error)
   })
 }
 
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => {
-    void Promise.all([loadPreferences().then(syncPreferences), replayFinanceOutbox()]).then(([preferencesResult, financeResult]) => {
-      const result = financeResult !== 'synced' ? financeResult : preferencesResult
+    void Promise.all([loadPreferences().then(syncPreferences), replayFinanceOutbox(), replayShoppingOutbox()]).then(([preferencesResult, financeResult, shoppingResult]) => {
+      const result = financeResult !== 'synced' ? financeResult : shoppingResult !== 'synced' ? shoppingResult : preferencesResult
       window.dispatchEvent(new CustomEvent('pocketflow:sync-complete', { detail: result }))
     }).catch(() => undefined)
   })
