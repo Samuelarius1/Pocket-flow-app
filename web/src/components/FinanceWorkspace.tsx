@@ -1,9 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import useSWR from 'swr'
+import useSWR, { mutate as mutateSWR } from 'swr'
 import { ArrowDownLeft, ArrowRight, CirclePlus, Landmark, Pencil, RefreshCw, Target, Trash2, WalletCards } from 'lucide-react'
-import { cacheFinanceCategories, clearFinanceMutation, enqueueFinanceMutation, getFinanceConflicts, getFinanceOwner, loadFinanceCategories, loadFinanceRecords, removeCachedFinanceRecord, replayFinanceOutbox, resolveFinanceConflict, saveCachedFinanceRecord, type FinanceCategory, type FinanceData, type FinanceMutation, type FinanceRecord, type FinanceResource } from '../finance-store'
+import './FinanceWorkspace.css'
+import { adjustCachedAccountBalance, cacheFinanceCategories, clearFinanceMutation, enqueueFinanceMutation, getFinanceConflicts, getFinanceOwner, loadFinanceCategories, loadFinanceRecords, removeCachedFinanceRecord, replayFinanceOutbox, resolveFinanceConflict, saveCachedFinanceRecord, type FinanceCategory, type FinanceData, type FinanceMutation, type FinanceRecord, type FinanceResource } from '../finance-store'
 
-type Props = { resource: FinanceResource; currency: string; onSignIn: () => void }
+type Props = { resource: FinanceResource; currency: string; onSignIn: () => void; onOpenAccounts?: () => void }
 type Draft = { name: string; institution: string; accountType: string; currency: string; balance: string; accountId: string; category: string; categoryId: string; description: string; amount: string; kind: string; occurredAt: string; periodStart: string; periodEnd: string; target: string; saved: string; targetDate: string }
 
 const titles: Record<FinanceResource, { title: string; description: string; add: string; icon: typeof WalletCards }> = {
@@ -34,6 +35,26 @@ function moneyInput(minor: number | undefined, currency: string): string {
   return minor === undefined ? '' : String(minor / (10 ** fractionDigits(currency)))
 }
 
+function transactionBalanceDelta(data: FinanceData): number {
+  const amount = Number(data.amountMinor || 0)
+  return data.kind === 'income' ? amount : -amount
+}
+
+async function adjustCachedTransactionBalance(previous?: FinanceData, next?: FinanceData): Promise<void> {
+  const changes = new Map<string, { currency: string; delta: number }>()
+  const add = (data: FinanceData | undefined, direction: number) => {
+    if (!data || !data.accountId) return
+    const accountId = String(data.accountId)
+    const currency = String(data.currency || '')
+    const existing = changes.get(accountId) ?? { currency, delta: 0 }
+    existing.delta += transactionBalanceDelta(data) * direction
+    changes.set(accountId, existing)
+  }
+  add(previous, -1)
+  add(next, 1)
+  for (const [accountId, change] of changes) await adjustCachedAccountBalance(accountId, change.currency, change.delta)
+}
+
 function draftFor(record: FinanceRecord, resource: FinanceResource): Draft {
   const data = record.data
   return {
@@ -57,7 +78,7 @@ function payloadFor(resource: FinanceResource, draft: Draft): FinanceData {
   return { name: draft.name.trim(), currency, targetMinor: toMinor(draft.target, currency), savedMinor: toMinor(draft.saved || '0', currency), targetDate: draft.targetDate }
 }
 
-export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
+export function FinanceWorkspace({ resource, currency, onSignIn, onOpenAccounts }: Props) {
   const title = titles[resource]
   const { data: items = [], error, isLoading, mutate } = useSWR<FinanceRecord[], Error>(`/api/finance/${resource}`, () => loadFinanceRecords(resource), { revalidateOnFocus: true, revalidateOnReconnect: true })
   const { data: accounts = [] } = useSWR<FinanceRecord[]>(resource === 'transactions' ? '/api/finance/accounts' : null, () => loadFinanceRecords('accounts'))
@@ -118,7 +139,13 @@ export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
     }
   }, [mutate, resource])
 
-  const openCreate = () => { setEditing(null); setDraft(emptyDraft(currency)); setMessage(''); setFormOpen(true) }
+  const openCreate = () => {
+    const firstAccount = resource === 'transactions' ? accounts[0] : undefined
+    setEditing(null)
+    setDraft({ ...emptyDraft(firstAccount ? String(firstAccount.data.currency || currency) : currency), accountId: firstAccount?.id ?? '' })
+    setMessage('')
+    setFormOpen(true)
+  }
   const openEdit = (record: FinanceRecord) => { setEditing(record); setDraft(draftFor(record, resource)); setMessage(''); setFormOpen(true) }
   const updateDraft = (key: keyof Draft, value: string) => setDraft((current) => ({ ...current, [key]: value }))
 
@@ -126,6 +153,7 @@ export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
 
   async function syncNow() {
     const result = await replayFinanceOutbox(true)
+    window.dispatchEvent(new CustomEvent('pocketflow:sync-complete', { detail: result }))
     if (result === 'synced') { setMessage('Everything is synced.'); await mutate() }
     else if (result === 'conflict') setMessage('A newer server version needs review before this change can sync.')
     else if (result === 'sign-in-required') { setMessage('Sign in to sync your offline changes.'); onSignIn() }
@@ -197,6 +225,7 @@ export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
           await clearFinanceMutation(resource, saved.id)
           await saveCachedFinanceRecord(resource, saved)
           await mutate((current = []) => [saved, ...current.filter((item) => item.id !== saved.id)], { revalidate: false })
+          if (resource === 'transactions') void mutateSWR('/api/finance/accounts')
           setMessage('Saved and synced to your account.')
           setEditing(null)
           setFormOpen(false)
@@ -208,8 +237,14 @@ export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
       }
       const optimistic = makeRecord(recordId, currentVersion, data)
       await enqueueFinanceMutation({ resource, operation: editing ? 'update' : 'create', recordId, version: currentVersion, data })
+      if (resource === 'transactions') await adjustCachedTransactionBalance(editing?.data, data)
       await saveCachedFinanceRecord(resource, optimistic)
       await mutate((current = []) => [optimistic, ...current.filter((item) => item.id !== optimistic.id)], { revalidate: false })
+      window.dispatchEvent(new CustomEvent('pocketflow:sync-complete', { detail: 'offline' }))
+      if (resource === 'transactions') {
+        const cachedAccounts = await loadFinanceRecords('accounts').catch(() => [])
+        await mutateSWR('/api/finance/accounts', cachedAccounts, { revalidate: false })
+      }
       setMessage('Saved on this device. It will sync when you are back online.')
       setEditing(null)
       setFormOpen(false)
@@ -234,6 +269,7 @@ export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
           await clearFinanceMutation(resource, record.id)
           await removeCachedFinanceRecord(resource, record.id)
           await mutate((current = []) => current.filter((item) => item.id !== record.id), { revalidate: false })
+          if (resource === 'transactions') void mutateSWR('/api/finance/accounts')
           setMessage('Record deleted.')
           return
         } catch (error) {
@@ -243,8 +279,14 @@ export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
       const ownerId = await getFinanceOwner()
       if (!ownerId) { setMessage('Connect to your account while online before deleting records offline.'); return }
       await enqueueFinanceMutation({ resource, operation: 'delete', recordId: record.id, version: record.version })
+      if (resource === 'transactions') await adjustCachedTransactionBalance(record.data)
       await removeCachedFinanceRecord(resource, record.id)
       await mutate((current = []) => current.filter((item) => item.id !== record.id), { revalidate: false })
+      window.dispatchEvent(new CustomEvent('pocketflow:sync-complete', { detail: 'offline' }))
+      if (resource === 'transactions') {
+        const cachedAccounts = await loadFinanceRecords('accounts').catch(() => [])
+        await mutateSWR('/api/finance/accounts', cachedAccounts, { revalidate: false })
+      }
       setMessage('Deleted on this device. The change will sync when you are back online.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to delete this record.')
@@ -259,7 +301,7 @@ export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
   return <div className="finance-page page-stack">
     <section className="finance-page-head">
       <div><p className="eyebrow">YOUR MONEY, IN GOOD FLOW</p><h1>{title.title}</h1><p>{title.description}</p></div>
-      <button className="button button-primary" onClick={openCreate}><CirclePlus size={16}/>{title.add}</button>
+      <div className="finance-head-actions">{resource === 'transactions' && accounts.length === 0 && <button className="button button-secondary" onClick={onOpenAccounts}>Add account</button>}<button className="button button-primary" onClick={openCreate}><CirclePlus size={16}/>{title.add}</button></div>
     </section>
     <section className="finance-toolbar panel" aria-label={`${title.title} tools`}>
       <label className="finance-search"><span className="sr-only">Search {title.title.toLowerCase()}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${title.title.toLowerCase()}`}/></label>
@@ -281,10 +323,10 @@ export function FinanceWorkspace({ resource, currency, onSignIn }: Props) {
     {formOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setFormOpen(false) }}><section className="finance-modal" role="dialog" aria-modal="true" aria-labelledby="finance-form-title"><div className="finance-modal-head"><span className="modal-icon"><Icon size={19}/></span><button className="modal-close" aria-label="Close form" onClick={() => setFormOpen(false)}>×</button></div><p className="eyebrow">{editing ? 'UPDATE YOUR RECORD' : 'ADD A REAL RECORD'}</p><h2 id="finance-form-title">{editing ? 'Edit record' : title.add}</h2><form className="account-form" onSubmit={(event) => void saveRecord(event)}>
       {(resource === 'accounts' || resource === 'goals') && <label className="form-field"><span>{resource === 'accounts' ? 'Account name' : 'Goal name'}</span><input required maxLength={120} value={draft.name} onChange={(event) => updateDraft('name', event.target.value)} placeholder={resource === 'accounts' ? 'Everyday account' : 'Emergency fund'}/></label>}
       {resource === 'accounts' && <><label className="form-field"><span>Institution</span><input maxLength={120} value={draft.institution} onChange={(event) => updateDraft('institution', event.target.value)} placeholder="Bank or cash wallet"/></label><label className="form-field"><span>Account type</span><select value={draft.accountType} onChange={(event) => updateDraft('accountType', event.target.value)}><option value="checking">Checking</option><option value="savings">Savings</option><option value="cash">Cash</option><option value="credit">Credit</option><option value="investment">Investment</option></select></label><MoneyField label="Current balance" value={draft.balance} currency={draft.currency} onValue={(value) => updateDraft('balance', value)} allowNegative/></>}
-      {resource === 'transactions' && <><label className="form-field"><span>Description</span><input required maxLength={200} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} placeholder="Groceries, salary, rent…"/></label><label className="form-field"><span>Account</span><select required value={draft.accountId} onChange={(event) => updateDraft('accountId', event.target.value)}><option value="">Choose an account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{String(account.data.name)}</option>)}</select></label><label className="form-field"><span>Type</span><select value={draft.kind} onChange={(event) => setDraft((current) => ({ ...current, kind: event.target.value, categoryId: '', category: '' }))}><option value="expense">Expense</option><option value="income">Income</option><option value="transfer">Transfer</option></select></label>{categoryField}<MoneyField label="Amount" value={draft.amount} currency={draft.currency} onValue={(value) => updateDraft('amount', value)}/><label className="form-field"><span>Date and time</span><input required type="datetime-local" value={draft.occurredAt} onChange={(event) => updateDraft('occurredAt', event.target.value)}/></label></>}
+      {resource === 'transactions' && <><label className="form-field"><span>Description</span><input required maxLength={200} value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} placeholder="Groceries, salary, rent…"/></label><label className="form-field"><span>Account</span><select required value={draft.accountId} onChange={(event) => { const account = accounts.find((item) => item.id === event.target.value); setDraft((current) => ({ ...current, accountId: event.target.value, currency: String(account?.data.currency || current.currency) })) }}><option value="">Choose an account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{String(account.data.name)} · {String(account.data.currency)}</option>)}</select></label><label className="form-field"><span>Type</span><select value={draft.kind} onChange={(event) => setDraft((current) => ({ ...current, kind: event.target.value, categoryId: '', category: '' }))}><option value="expense">Expense</option><option value="income">Income</option><option value="transfer">Transfer</option></select></label>{categoryField}<MoneyField label="Amount" value={draft.amount} currency={draft.currency} onValue={(value) => updateDraft('amount', value)}/><label className="form-field"><span>Date and time</span><input required type="datetime-local" value={draft.occurredAt} onChange={(event) => updateDraft('occurredAt', event.target.value)}/></label></>}
       {resource === 'budgets' && <>{categoryField}<MoneyField label="Budget limit" value={draft.amount} currency={draft.currency} onValue={(value) => updateDraft('amount', value)}/><label className="form-field"><span>Period begins</span><input required type="date" value={draft.periodStart} onChange={(event) => updateDraft('periodStart', event.target.value)}/></label><label className="form-field"><span>Period ends</span><input required type="date" value={draft.periodEnd} onChange={(event) => updateDraft('periodEnd', event.target.value)}/></label></>}
       {resource === 'goals' && <><MoneyField label="Target amount" value={draft.target} currency={draft.currency} onValue={(value) => updateDraft('target', value)}/><MoneyField label="Already saved" value={draft.saved} currency={draft.currency} onValue={(value) => updateDraft('saved', value)}/><label className="form-field"><span>Target date (optional)</span><input type="date" value={draft.targetDate} onChange={(event) => updateDraft('targetDate', event.target.value)}/></label></>}
-      <label className="form-field"><span>Currency</span><select value={draft.currency} onChange={(event) => updateDraft('currency', event.target.value)}><option value="UGX">UGX · Ugandan shilling</option><option value="USD">USD · US dollar</option><option value="EUR">EUR · Euro</option><option value="GBP">GBP · British pound</option><option value="KES">KES · Kenyan shilling</option><option value="TZS">TZS · Tanzanian shilling</option></select></label>
+      {resource === 'transactions' ? <label className="form-field"><span>Currency</span><input value={draft.currency} readOnly aria-readonly="true"/><small>Matches the selected account.</small></label> : <label className="form-field"><span>Currency</span><select value={draft.currency} onChange={(event) => updateDraft('currency', event.target.value)}><option value="UGX">UGX · Ugandan shilling</option><option value="USD">USD · US dollar</option><option value="EUR">EUR · Euro</option><option value="GBP">GBP · British pound</option><option value="KES">KES · Kenyan shilling</option><option value="TZS">TZS · Tanzanian shilling</option></select></label>}
       {message && <p className="form-error" role="alert">{message}</p>}
       <div className="finance-form-actions"><button type="button" className="button button-secondary" onClick={() => setFormOpen(false)}>Cancel</button><button type="submit" className="button button-primary" disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : title.add}</button></div>
     </form></section></div>}

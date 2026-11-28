@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import './ShoppingWorkspace.css'
 import useSWR from 'swr'
 import { Check, CheckCheck, LoaderCircle, Minus, Plus, ShoppingBasket, Trash2 } from 'lucide-react'
+import { enqueueShoppingMutation, loadShoppingItems, saveShoppingCache, type ShoppingItem, type ShoppingMutation } from '../shopping-store'
 
-type ShoppingItem = { id: string; version: number; name: string; quantity: number; purchased: boolean; updatedAt: string }
 type ShoppingListResponse = { items: ShoppingItem[] }
 type ShoppingInput = Pick<ShoppingItem, 'name' | 'quantity' | 'purchased'> & { version?: number }
 type Props = { onSignIn: () => void }
@@ -19,7 +19,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export function ShoppingWorkspace({ onSignIn }: Props) {
-  const { data, error, mutate } = useSWR<ShoppingListResponse>('/api/shopping', request)
+  const { data, error, mutate } = useSWR<ShoppingListResponse>('/api/shopping', loadShoppingItems, { revalidateOnFocus: true, revalidateOnReconnect: true })
   const [name, setName] = useState('')
   const [quantity, setQuantity] = useState(1)
   const [filter, setFilter] = useState<'all' | 'needed' | 'purchased'>('all')
@@ -28,8 +28,21 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
   const items = data?.items ?? []
   const purchasedCount = useMemo(() => items.filter((item) => item.purchased).length, [items])
   const visibleItems = useMemo(() => items.filter((item) => filter === 'all' || (filter === 'purchased' ? item.purchased : !item.purchased)), [filter, items])
-  const needsSignIn = (error as (Error & { status?: number }) | undefined)?.status === 401
+  const needsSignIn = (error as (Error & { status?: number }) | undefined)?.status === 401 || error?.message.includes('Sign in')
   const progress = items.length ? Math.round((purchasedCount / items.length) * 100) : 0
+
+  useEffect(() => {
+    const onSync = () => { void mutate() }
+    window.addEventListener('pocketflow:shopping-sync-complete', onSync)
+    return () => window.removeEventListener('pocketflow:shopping-sync-complete', onSync)
+  }, [mutate])
+
+  async function saveOfflineList(nextItems: ShoppingItem[], mutation: Omit<ShoppingMutation, 'id' | 'ownerId' | 'queuedAt' | 'attempts' | 'nextAttemptAt'>) {
+    await enqueueShoppingMutation(mutation)
+    await saveShoppingCache(nextItems)
+    await mutate({ items: nextItems }, { revalidate: false })
+    window.dispatchEvent(new CustomEvent('pocketflow:sync-complete', { detail: 'offline' }))
+  }
 
   async function addItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -37,12 +50,26 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
     if (!cleanName || busy) return
     setBusy('add')
     setNotice('')
+    const id = crypto.randomUUID()
+    const input = { name: cleanName, quantity, purchased: false }
+    const optimistic: ShoppingItem = { id, version: 0, ...input, updatedAt: new Date().toISOString() }
     try {
-      await request<ShoppingItem>('/api/shopping', { method: 'POST', body: JSON.stringify({ name: cleanName, quantity, purchased: false }) })
+      if (!navigator.onLine) {
+        await saveOfflineList([optimistic, ...items], { operation: 'create', recordId: id, version: 0, data: input })
+        setNotice(`${cleanName} saved on this device. It will sync when you reconnect.`)
+      } else {
+        try {
+          await request<ShoppingItem>('/api/shopping', { method: 'POST', body: JSON.stringify({ id, ...input }) })
+          await mutate()
+          setNotice(`${cleanName} added to your list.`)
+        } catch (reason) {
+          if ((reason as { status?: number }).status === 401 || !(reason instanceof TypeError)) throw reason
+          await saveOfflineList([optimistic, ...items], { operation: 'create', recordId: id, version: 0, data: input })
+          setNotice(`${cleanName} saved on this device. It will sync when the service returns.`)
+        }
+      }
       setName('')
       setQuantity(1)
-      await mutate()
-      setNotice(`${cleanName} added to your list.`)
     } catch (reason) { setNotice((reason as Error).message) } finally { setBusy(null) }
   }
 
@@ -50,9 +77,22 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
     if (busy) return
     setBusy(item.id)
     setNotice('')
+    const input = { name: item.name, quantity: patch.quantity ?? item.quantity, purchased: patch.purchased ?? item.purchased }
+    const nextItem: ShoppingItem = { ...item, ...input, version: item.version + 1, updatedAt: new Date().toISOString() }
+    const nextItems = [nextItem, ...items.filter((entry) => entry.id !== item.id)]
     try {
-      await request<ShoppingItem>(`/api/shopping/${encodeURIComponent(item.id)}`, { method: 'PUT', body: JSON.stringify({ name: item.name, quantity: patch.quantity ?? item.quantity, purchased: patch.purchased ?? item.purchased, version: item.version }) })
-      await mutate()
+      if (!navigator.onLine) {
+        await saveOfflineList(nextItems, { operation: 'update', recordId: item.id, version: item.version, data: input })
+      } else {
+        try {
+          await request<ShoppingItem>(`/api/shopping/${encodeURIComponent(item.id)}`, { method: 'PUT', body: JSON.stringify({ ...input, version: item.version }) })
+          await mutate()
+        } catch (reason) {
+          if ((reason as { status?: number }).status === 401 || !(reason instanceof TypeError)) throw reason
+          await saveOfflineList(nextItems, { operation: 'update', recordId: item.id, version: item.version, data: input })
+          setNotice('Saved on this device. This change will sync when the service returns.')
+        }
+      }
     } catch (reason) {
       setNotice((reason as Error).message)
       await mutate()
@@ -63,10 +103,22 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
     if (busy) return
     setBusy(item.id)
     setNotice('')
+    const nextItems = items.filter((entry) => entry.id !== item.id)
     try {
-      await request<void>(`/api/shopping/${encodeURIComponent(item.id)}`, { method: 'DELETE' })
-      await mutate()
-      setNotice(`${item.name} removed.`)
+      if (!navigator.onLine) {
+        await saveOfflineList(nextItems, { operation: 'delete', recordId: item.id, version: item.version })
+        setNotice(`${item.name} removed on this device. It will sync when you reconnect.`)
+      } else {
+        try {
+          await request<void>(`/api/shopping/${encodeURIComponent(item.id)}`, { method: 'DELETE' })
+          await mutate()
+          setNotice(`${item.name} removed.`)
+        } catch (reason) {
+          if ((reason as { status?: number }).status === 401 || !(reason instanceof TypeError)) throw reason
+          await saveOfflineList(nextItems, { operation: 'delete', recordId: item.id, version: item.version })
+          setNotice(`${item.name} removed on this device. It will sync when the service returns.`)
+        }
+      }
     } catch (reason) { setNotice((reason as Error).message) } finally { setBusy(null) }
   }
 
@@ -74,9 +126,21 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
     if (busy || !purchasedCount) return
     setBusy('clear')
     setNotice('')
+    const purchased = items.filter((item) => item.purchased)
     try {
-      await Promise.all(items.filter((item) => item.purchased).map((item) => request<void>(`/api/shopping/${encodeURIComponent(item.id)}`, { method: 'DELETE' })))
-      await mutate()
+      if (!navigator.onLine) {
+        let nextItems = [...items]
+        for (const item of purchased) {
+          await enqueueShoppingMutation({ operation: 'delete', recordId: item.id, version: item.version })
+          nextItems = nextItems.filter((entry) => entry.id !== item.id)
+        }
+        await saveShoppingCache(nextItems)
+        await mutate({ items: nextItems }, { revalidate: false })
+        window.dispatchEvent(new CustomEvent('pocketflow:sync-complete', { detail: 'offline' }))
+      } else {
+        await Promise.all(purchased.map((item) => request<void>(`/api/shopping/${encodeURIComponent(item.id)}`, { method: 'DELETE' })))
+        await mutate()
+      }
       setNotice('Purchased items cleared.')
     } catch (reason) {
       setNotice((reason as Error).message)
@@ -86,7 +150,7 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
 
   return <section className="shopping-page" aria-labelledby="shopping-title">
     <header className="shopping-head">
-      <div><p className="eyebrow">YOUR EVERYDAY LIST</p><h1 id="shopping-title">Shopping list</h1><p>Keep the essentials close. Your list stays saved to your account.</p></div>
+      <div><p className="eyebrow">YOUR EVERYDAY LIST</p><h1 id="shopping-title">Shopping list</h1><p>Keep the essentials close. Your list syncs to your account and stays available offline.</p></div>
       {data && !needsSignIn && <div className="shopping-count-card"><span className="shopping-count-icon"><ShoppingBasket size={19}/></span><span><strong>{items.length}</strong><small>{items.length === 1 ? 'item on your list' : 'items on your list'}</small></span></div>}
     </header>
 
@@ -113,7 +177,7 @@ export function ShoppingWorkspace({ onSignIn }: Props) {
         <div className="shopping-stepper" aria-label={`Quantity: ${item.quantity}`}><button aria-label={`Decrease ${item.name} quantity`} disabled={item.quantity <= 1 || Boolean(busy)} onClick={() => void updateItem(item, { quantity: item.quantity - 1 })}><Minus size={13}/></button><span>{item.quantity}</span><button aria-label={`Increase ${item.name} quantity`} disabled={item.quantity >= 999 || Boolean(busy)} onClick={() => void updateItem(item, { quantity: item.quantity + 1 })}><Plus size={13}/></button></div>
         <button className="shopping-delete" aria-label={`Remove ${item.name}`} disabled={Boolean(busy)} onClick={() => void deleteItem(item)}><Trash2 size={16}/></button>
       </li>)}</ul>}
-      <p className="shopping-footnote"><CheckCheck size={14}/> Changes save automatically to your account.</p>
+      <p className="shopping-footnote"><CheckCheck size={14}/>{navigator.onLine ? 'Changes sync to your account automatically.' : 'Offline · changes are saved on this device and queued to sync.'}</p>
     </>}
   </section>
 }

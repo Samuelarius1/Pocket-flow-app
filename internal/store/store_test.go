@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -38,8 +39,8 @@ func TestOpenUpgradesLegacyDatabaseWithoutLosingData(t *testing.T) {
 		if err := database.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 			t.Fatalf("read migration count: %v", err)
 		}
-		if applied != 3 {
-			t.Fatalf("expected 3 migrations, got %d", applied)
+		if applied != 4 {
+			t.Fatalf("expected 4 migrations, got %d", applied)
 		}
 		var email string
 		if err := database.DB.QueryRow(`SELECT email FROM users WHERE id='legacy-user'`).Scan(&email); err != nil {
@@ -68,5 +69,24 @@ func TestOpenUpgradesLegacyDatabaseWithoutLosingData(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected existing record to survive reopen, got %d", count)
+	}
+}
+
+func TestPostgresMigrationWhenConfigured(t *testing.T) {
+	connectionString := os.Getenv("DATABASE_URL")
+	if connectionString == "" {
+		t.Skip("DATABASE_URL is not configured")
+	}
+	database, err := Open(connectionString)
+	if err != nil {
+		t.Fatalf("open configured postgres database: %v", err)
+	}
+	defer database.DB.Close()
+	var categoryCount int
+	if err := database.DB.QueryRow(`SELECT COUNT(*) FROM financial_categories WHERE id LIKE 'system-%'`).Scan(&categoryCount); err != nil {
+		t.Fatalf("read seeded categories: %v", err)
+	}
+	if categoryCount < 12 {
+		t.Fatalf("expected 12 system categories, got %d", categoryCount)
 	}
 }

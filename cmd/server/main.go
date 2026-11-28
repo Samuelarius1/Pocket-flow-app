@@ -27,18 +27,26 @@ func securityHeaders(next http.Handler) http.Handler {
 func main() {
 	path := os.Getenv("POCKETFLOW_DB_PATH")
 	if path == "" {
+		path = os.Getenv("DATABASE_URL")
+	}
+	if path == "" {
 		path = "./data/pocketflow.db"
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		log.Fatalf("create data directory: %v", err)
+	isPostgres := strings.HasPrefix(path, "postgres://") || strings.HasPrefix(path, "postgresql://")
+	if !isPostgres {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			log.Fatalf("create data directory: %v", err)
+		}
 	}
 	database, err := store.Open(path)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}
 	defer database.DB.Close()
-	if err := os.Chmod(path, 0600); err != nil {
-		log.Fatalf("secure database file: %v", err)
+	if !isPostgres {
+		if err := os.Chmod(path, 0600); err != nil {
+			log.Fatalf("secure database file: %v", err)
+		}
 	}
 
 	apiHandler := api.New(database)
